@@ -1,0 +1,315 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+//////////////////// ENUMS ////////////////////
+
+enum Role {
+  PLAYER
+  OWNER
+  EMPLOYEE
+  ADMIN
+}
+
+enum SkillLevel {
+  WEAK
+  AVERAGE
+  GOOD
+  EXCELLENT
+  LEGENDARY
+}
+
+enum FieldType {
+  FOOTBALL
+  PADEL
+}
+
+enum FieldStatus {
+  OPEN
+  CLOSED
+  MAINTENANCE
+}
+
+enum SlotStatus {
+  AVAILABLE
+  AVAILABLE_NEEDS_CONFIRM
+  TEMP_LOCKED
+  PENDING_CONFIRMATION
+  BOOKED
+}
+
+enum BookingStatus {
+  DRAFT
+  PENDING_CONFIRMATION
+  CONFIRMED
+  CANCELLED
+  FAILED
+  EXPIRED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum NotificationType {
+  SYSTEM
+  BOOKING_UPDATE
+  PAYMENT_UPDATE
+  GENERAL
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  LOGIN
+  LOGOUT
+  REGISTER
+}
+
+//////////////////// USER ////////////////////
+
+model User {
+  id            String   @id @default(cuid())
+  name          String
+  email         String   @unique
+  passwordHash  String?
+
+  phoneNumber   String?  @unique
+  age           Int?
+  avatar        String?
+  description   String?
+  skillLevel    SkillLevel @default(AVERAGE)
+
+  role          Role @default(PLAYER)
+  roleUpdatedAt DateTime?
+
+  // 🔐 Auth & Security
+  isVerified    Boolean   @default(true)
+  emailVerifiedAt DateTime?
+  isActive      Boolean   @default(true)
+  loginAttempts Int       @default(0)
+  lockedUntil   DateTime?
+  lastLogin     DateTime?
+
+  // 🔗 Relations
+  bookings        Booking[]
+  slotsLocked    Slot[] @relation("SlotLockedByUser")
+  notifications  Notification[]
+  flags          FlaggedUser[]
+  auditLogs      AuditLog[]
+  idempotencyKeys IdempotencyKey[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([email])
+  @@index([role])
+  @@index([isActive, isVerified])
+}
+
+//////////////////// FIELD ////////////////////
+
+model Field {
+  id          String @id @default(cuid())
+  name        String
+  description String?
+  location    String
+  address     String?
+
+  type        FieldType
+  imageUrl    String?
+
+  pricePerHour    Float
+  depositPrice    Float
+  openingTime     DateTime
+  closingTime     DateTime
+  slotDurationMin Int @default(60)
+
+  status     FieldStatus @default(OPEN)
+  facilities String[]
+
+  slots    Slot[]
+  bookings Booking[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+//////////////////// SLOT ////////////////////
+
+model Slot {
+  id      String @id @default(cuid())
+  fieldId String
+  field   Field  @relation(fields: [fieldId], references: [id])
+
+  startTime DateTime
+  endTime   DateTime
+
+  durationMinutes Int @default(60)
+  price            Float
+  deposit          Float
+
+  status      SlotStatus @default(AVAILABLE)
+  lockedUntil DateTime?
+
+  lockedByUserId String?
+  lockedByUser   User? @relation("SlotLockedByUser", fields: [lockedByUserId], references: [id])
+
+  bookings Booking[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([fieldId, startTime])
+  @@index([status, lockedUntil])
+}
+
+//////////////////// BOOKING ////////////////////
+
+model Booking {
+  id String @id @default(cuid())
+
+  userId String
+  user   User @relation(fields: [userId], references: [id])
+
+  fieldId String
+  field   Field @relation(fields: [fieldId], references: [id])
+
+  slotId String
+  slot   Slot @relation(fields: [slotId], references: [id])
+
+  status        BookingStatus @default(DRAFT)
+  paymentStatus PaymentStatus @default(PENDING)
+
+  totalAmount Float
+  depositPaid Float @default(0)
+
+  refundableUntil DateTime?
+  expiresAt       DateTime?
+
+  paymentId String?
+  orderId   String?
+
+  idempotencyKey String? @unique
+
+  payments      Payment[]
+  notifications Notification[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, status])
+  @@index([slotId])
+}
+
+//////////////////// PAYMENT ////////////////////
+
+model Payment {
+  id String @id @default(cuid())
+
+  bookingId String
+  booking   Booking @relation(fields: [bookingId], references: [id])
+
+  amount   Float
+  currency String @default("EGP")
+
+  paymentId String?
+  orderId   String?
+
+  status   PaymentStatus @default(PENDING)
+  metadata Json?
+
+  refundedAmount Float @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([bookingId])
+}
+
+//////////////////// NOTIFICATION ////////////////////
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+
+  bookingId String?
+  booking   Booking? @relation(fields: [bookingId], references: [id])
+
+  type    NotificationType
+  title   String
+  message String
+  data    Json?
+
+  isRead Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, isRead])
+}
+
+//////////////////// IDEMPOTENCY ////////////////////
+
+model IdempotencyKey {
+  id          String   @id @default(cuid())
+  key         String
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+
+  requestHash String
+  method      String
+  response    Json?
+  expiresAt   DateTime
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([key, userId])
+}
+
+//////////////////// FLAGGED USERS ////////////////////
+
+model FlaggedUser {
+  id     String @id @default(cuid())
+  userId String
+  user   User @relation(fields: [userId], references: [id])
+
+  reason    String
+  severity  String @default("MEDIUM")
+  expiresAt DateTime?
+
+  createdAt DateTime @default(now())
+}
+
+//////////////////// AUDIT LOG ////////////////////
+
+model AuditLog {
+  id String @id @default(cuid())
+
+  userId String?
+  user   User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  action     AuditAction
+  entityType String?
+  entityId   String?
+  oldValue   Json?
+  newValue   Json?
+  ipAddress  String?
+  userAgent  String?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([action])
+}
